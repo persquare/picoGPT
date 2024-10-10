@@ -59,13 +59,21 @@ class HardwareConfig:
     seed_offset: int = 0
     seed: int = 1337
 
+@dataclass
+class SampleConfig:
+        start: str = "\n"
+        num_samples: int = 10 # number of samples to draw
+        max_new_tokens: int = 500 # number of tokens generated in each sample
+        temperature: float = 0.8 # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
+        top_k: int = 200 # retain only the top_k most likely tokens, clamp others to have 0 probability
+
+
 class ANN(object):
 
-    def __init__(self):
+    def __init__(self, device):
         super().__init__()
-        hc = HardwareConfig()
-        self.device = hc.device
-        torch.manual_seed(hc.seed + hc.seed_offset)
+
+        self.device = device
         # init a new model from scratch
         mc = ModelConfig()
         self.model = GPT(mc)
@@ -112,7 +120,6 @@ class ANN(object):
 
 
     def train(self, tc, train_data, val_data):
-        # device = self.hc.device
         self.model.to(self.device)
         # Cuda only. If enabled=False scaler is a no-op but still needed for convergence?!
         scaler = torch.amp.GradScaler(enabled=False)
@@ -186,38 +193,23 @@ class ANN(object):
             if iter_num > tc.max_iters:
                 return checkpoint
 
-    def sample(self, checkpoint, coder):
+    def sample(self, checkpoint, coder, sc):
+        device = 'cpu' # override, much faster than hc.device='mps'
 
-        device = 'cpu' # override
-
-        # -----------------------------------------------------------------------------
-        start = "Lo!\n" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
-        num_samples = 10 # number of samples to draw
-        max_new_tokens = 500 # number of tokens generated in each sample
-        temperature = 0.8 # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
-        top_k = 200 # retain only the top_k most likely tokens, clamp others to have 0 probability
-
-        seed = 1337
-        # -----------------------------------------------------------------------------
-
-        torch.manual_seed(seed + self.hc.seed_offset)
-        # ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[hc.dtype]
-
-#        model = GPT(mc)
         self.model.load_state_dict(checkpoint)
 
         #model.eval()
-        self.model.to(device) # Much faster than hc.device='mps'
+        self.model.to(device)
 
-        start_ids = coder.encode(start)
+        start_ids = coder.encode(sc.start)
         x = (torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...])
 
         # run generation
         res = []
         with torch.no_grad():
             with contextlib.nullcontext():
-                for k in range(num_samples):
-                    y = self.model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k)
+                for k in range(sc.num_samples):
+                    y = self.model.generate(x, sc.max_new_tokens, temperature=sc.temperature, top_k=sc.top_k)
                     res.append(coder.decode(y[0].tolist()))
 
         return "".join(res)
@@ -267,11 +259,13 @@ def main():
 
     tc = TrainConfig()
     coder = Coder(tc)
-    ann = ANN()
+    hc = HardwareConfig()
+    ann = ANN(hc.device)
 
-    if True:
+    if False:
         input_file_path = os.path.join('data', tc.dataset, 'input.txt')
         train_data, val_data = get_data(input_file_path, coder)
+        torch.manual_seed(hc.seed + hc.seed_offset)
         checkpoint = ann.train(tc, train_data, val_data)
         os.makedirs(tc.out_dir, exist_ok=True)
         print(f"saving checkpoint to {tc.out_dir}")
@@ -279,7 +273,9 @@ def main():
     else:
         # init from a model saved in a specific directory
         checkpoint = torch.load(os.path.join(tc.out_dir, 'ckpt.pt'), map_location='cpu', weights_only=True)
-        res = ann.sample(checkpoint, coder)
+        torch.manual_seed(hc.seed + hc.seed_offset)
+        sc = SampleConfig()
+        res = ann.sample(checkpoint, coder, sc)
         print(res)
 
 if __name__ == '__main__':
