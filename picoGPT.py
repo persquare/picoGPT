@@ -10,7 +10,6 @@ import contextlib
 from dataclasses import dataclass
 
 import torch
-import numpy as np
 
 from model import GPT
 
@@ -82,8 +81,9 @@ class ANN(object):
         # We recreate np.memmap every batch to avoid a memory leak, as per
         # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
         ix = torch.randint(len(data) - tc.block_size, (tc.batch_size,))
-        x = torch.stack([torch.from_numpy((data[i:i+tc.block_size]).astype(np.int64)) for i in ix])
-        y = torch.stack([torch.from_numpy((data[i+1:i+1+tc.block_size]).astype(np.int64)) for i in ix])
+        x = torch.stack([torch.tensor(data[i:i+tc.block_size], dtype=torch.int64) for i in ix])
+        y = torch.stack([torch.tensor(data[i+1:i+1+tc.block_size], dtype=torch.int64) for i in ix])
+
         x, y = x.to(self.device), y.to(self.device)
         return x, y
 
@@ -219,9 +219,6 @@ def get_data(input_file_path, coder):
     with open(input_file_path, 'r') as f:
         data = f.read()
 
-    # get all the unique characters that occur in this text
-    #chars = sorted(list(set(data)))
-
     # create the train and test splits
     n = len(data)
     train_data = data[:int(n*0.9)]
@@ -231,9 +228,6 @@ def get_data(input_file_path, coder):
     train_ids = coder.encode(train_data)
     val_ids = coder.encode(val_data)
 
-    # export to bin files
-    train_ids = np.array(train_ids, dtype=np.uint16)
-    val_ids = np.array(val_ids, dtype=np.uint16)
     return train_ids, val_ids
 
 class Coder(object):
@@ -262,7 +256,7 @@ def main():
     hc = HardwareConfig()
     ann = ANN(hc.device)
 
-    if False:
+    if True:
         input_file_path = os.path.join('data', tc.dataset, 'input.txt')
         train_data, val_data = get_data(input_file_path, coder)
         torch.manual_seed(hc.seed + hc.seed_offset)
@@ -270,7 +264,7 @@ def main():
         os.makedirs(tc.out_dir, exist_ok=True)
         print(f"saving checkpoint to {tc.out_dir}")
         torch.save(checkpoint, os.path.join(tc.out_dir, 'ckpt.pt'))
-    else:
+        # else:
         # init from a model saved in a specific directory
         checkpoint = torch.load(os.path.join(tc.out_dir, 'ckpt.pt'), map_location='cpu', weights_only=True)
         torch.manual_seed(hc.seed + hc.seed_offset)
