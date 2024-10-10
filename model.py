@@ -25,6 +25,16 @@ class Utils:
     def load_weights(tc):
         return torch.load(os.path.join(tc.out_dir, 'ckpt.pt'), weights_only=True)
 
+    def get_batch(data, device, tc):
+        # We recreate np.memmap every batch to avoid a memory leak, as per
+        # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
+        ix = torch.randint(len(data) - tc.block_size, (tc.batch_size,))
+        x = torch.stack([torch.tensor(data[i:i+tc.block_size], dtype=torch.int64) for i in ix])
+        y = torch.stack([torch.tensor(data[i+1:i+1+tc.block_size], dtype=torch.int64) for i in ix])
+
+        x, y = x.to(device), y.to(device)
+        return x, y
+
 
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """

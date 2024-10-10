@@ -78,30 +78,20 @@ class ANN(object):
         mc = ModelConfig()
         self.model = GPT(mc)
 
-    def _get_batch(self, data, tc):
-        # We recreate np.memmap every batch to avoid a memory leak, as per
-        # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
-        ix = torch.randint(len(data) - tc.block_size, (tc.batch_size,))
-        x = torch.stack([torch.tensor(data[i:i+tc.block_size], dtype=torch.int64) for i in ix])
-        y = torch.stack([torch.tensor(data[i+1:i+1+tc.block_size], dtype=torch.int64) for i in ix])
-
-        x, y = x.to(self.device), y.to(self.device)
-        return x, y
-
     # helps estimate an arbitrarily accurate loss over either split using many batches
     @torch.no_grad()
     def _estimate_loss(self, train_data, val_data, tc):
         out = []
-        self.model.eval()
+        # self.model.eval() # <-- THIS IS A NO-OP UNLESS IT HAS SERIOUS SIDE EFFECTS
         for data in [train_data, val_data]:
             losses = torch.zeros(tc.eval_iters)
             for k in range(tc.eval_iters):
-                X, Y = self._get_batch(data, tc)
+                X, Y = Utils.get_batch(data, self.device, tc)
                 with contextlib.nullcontext():
                     logits, loss = self.model(X, Y)
                 losses[k] = loss.item()
             out.append(losses.mean())
-        self.model.train() # <-- THIS IS A NO-OP UNLESS IT HAS SERIOUS SIDE EFFECTS
+        # self.model.train() # <-- THIS IS A NO-OP UNLESS IT HAS SERIOUS SIDE EFFECTS
         return tuple(out)
 
     # learning rate decay scheduler (cosine with warmup)
@@ -128,7 +118,7 @@ class ANN(object):
         optimizer = self.model.configure_optimizers(tc.weight_decay, tc.learning_rate, (tc.beta1, tc.beta2), self.device)
 
         # training loop
-        X, Y = self._get_batch(train_data, tc) # fetch the very first batch
+        X, Y = Utils.get_batch(train_data, self.device, tc) # fetch the very first batch
         t0 = time.time()
         local_iter_num = 0 # number of iterations in the lifetime of this process
         raw_model = self.model #
@@ -162,7 +152,7 @@ class ANN(object):
                     logits, loss = self.model(X, Y)
                     loss = loss / tc.gradient_accumulation_steps # scale the loss to account for gradient accumulation
                 # immediately async prefetch next batch while model is doing the forward pass on the GPU
-                X, Y = self._get_batch(train_data, tc)
+                X, Y = Utils.get_batch(train_data, self.device, tc)
                 # backward pass, with gradient scaling if training in fp16
                 scaler.scale(loss).backward()
             # clip the gradient
