@@ -40,8 +40,8 @@ class TrainConfig:
 
 @dataclass
 class ModelConfig:
-    block_size: int
-    vocab_size: int
+    vocab_size: int = TrainConfig.vocab_size
+    block_size: int = TrainConfig.block_size
     # model
     n_layer: int = 4
     n_head: int= 4
@@ -57,74 +57,70 @@ class HardwareConfig:
     compile: bool = False # use PyTorch 2.0 to compile the model to be faster
     # various inits, derived attributes, I/O setup
     seed_offset: int = 0
+    seed: int = 1337
 
 class ANN(object):
+
     def __init__(self):
         super().__init__()
-        tc = TrainConfig()
-        self.hc = HardwareConfig()
-        self.mc = ModelConfig(block_size=tc.block_size, vocab_size=tc.vocab_size)
-        torch.manual_seed(1337 + self.hc.seed_offset)
+        hc = HardwareConfig()
+        self.device = hc.device
+        torch.manual_seed(hc.seed + hc.seed_offset)
         # init a new model from scratch
-        self.model = GPT(self.mc)
+        mc = ModelConfig()
+        self.model = GPT(mc)
+
+    def _get_batch(self, data, tc):
+        # We recreate np.memmap every batch to avoid a memory leak, as per
+        # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
+        ix = torch.randint(len(data) - tc.block_size, (tc.batch_size,))
+        x = torch.stack([torch.from_numpy((data[i:i+tc.block_size]).astype(np.int64)) for i in ix])
+        y = torch.stack([torch.from_numpy((data[i+1:i+1+tc.block_size]).astype(np.int64)) for i in ix])
+        x, y = x.to(self.device), y.to(self.device)
+        return x, y
+
+    # helps estimate an arbitrarily accurate loss over either split using many batches
+    @torch.no_grad()
+    def _estimate_loss(self, train_data, val_data, tc):
+        out = []
+        self.model.eval()
+        for data in [train_data, val_data]:
+            losses = torch.zeros(tc.eval_iters)
+            for k in range(tc.eval_iters):
+                X, Y = self._get_batch(data, tc)
+                with contextlib.nullcontext():
+                    logits, loss = self.model(X, Y)
+                losses[k] = loss.item()
+            out.append(losses.mean())
+        self.model.train() # <-- THIS IS A NO-OP UNLESS IT HAS SERIOUS SIDE EFFECTS
+        return tuple(out)
+
+    # learning rate decay scheduler (cosine with warmup)
+    def _get_lr(self, it, tc):
+        # 1) linear warmup for warmup_iters steps
+        if it < tc.warmup_iters:
+            return tc.learning_rate * it / tc.warmup_iters
+        # 2) if it > lr_decay_iters, return min learning rate
+        if it > tc.lr_decay_iters:
+            return tc.min_lr
+        # 3) in between, use cosine decay down to min learning rate
+        decay_ratio = (it - tc.warmup_iters) / (tc.lr_decay_iters - tc.warmup_iters)
+        assert 0 <= decay_ratio <= 1
+        coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
+        return tc.min_lr + coeff * (tc.learning_rate - tc.min_lr)
+
+
 
     def train(self, tc, train_data, val_data):
-        hc = self.hc
-        mc = self.mc
-        self.model.to(self.hc.device)
+        # device = self.hc.device
+        self.model.to(self.device)
         # Cuda only. If enabled=False scaler is a no-op but still needed for convergence?!
         scaler = torch.amp.GradScaler(enabled=False)
         # optimizer
-        optimizer = self.model.configure_optimizers(tc.weight_decay, tc.learning_rate, (tc.beta1, tc.beta2), self.hc.device)
-
-        def get_batch(split):
-            # We recreate np.memmap every batch to avoid a memory leak, as per
-            # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
-            # data_dir = os.path.join('data', tc.dataset)
-            if split == 'train':
-                # data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
-                data = train_data
-            else:
-                # data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
-                data = val_data
-            ix = torch.randint(len(data) - mc.block_size, (tc.batch_size,))
-            x = torch.stack([torch.from_numpy((data[i:i+tc.block_size]).astype(np.int64)) for i in ix])
-            y = torch.stack([torch.from_numpy((data[i+1:i+1+tc.block_size]).astype(np.int64)) for i in ix])
-            x, y = x.to(hc.device), y.to(hc.device)
-            return x, y
-
-        # helps estimate an arbitrarily accurate loss over either split using many batches
-        @torch.no_grad()
-        def estimate_loss():
-            out = {}
-            self.model.eval()
-            for split in ['train', 'val']:
-                losses = torch.zeros(tc.eval_iters)
-                for k in range(tc.eval_iters):
-                    X, Y = get_batch(split)
-                    with contextlib.nullcontext():
-                        logits, loss = self.model(X, Y)
-                    losses[k] = loss.item()
-                out[split] = losses.mean()
-            self.model.train() # <-- THIS IS A NO-OP UNLESS IT HAS SERIOUS SIDE EFFECTS
-            return out
-
-        # learning rate decay scheduler (cosine with warmup)
-        def get_lr(it):
-            # 1) linear warmup for warmup_iters steps
-            if it < tc.warmup_iters:
-                return tc.learning_rate * it / tc.warmup_iters
-            # 2) if it > lr_decay_iters, return min learning rate
-            if it > tc.lr_decay_iters:
-                return tc.min_lr
-            # 3) in between, use cosine decay down to min learning rate
-            decay_ratio = (it - tc.warmup_iters) / (tc.lr_decay_iters - tc.warmup_iters)
-            assert 0 <= decay_ratio <= 1
-            coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
-            return tc.min_lr + coeff * (tc.learning_rate - tc.min_lr)
+        optimizer = self.model.configure_optimizers(tc.weight_decay, tc.learning_rate, (tc.beta1, tc.beta2), self.device)
 
         # training loop
-        X, Y = get_batch('train') # fetch the very first batch
+        X, Y = self._get_batch(train_data, tc) # fetch the very first batch
         t0 = time.time()
         local_iter_num = 0 # number of iterations in the lifetime of this process
         raw_model = self.model #
@@ -138,17 +134,17 @@ class ANN(object):
         while True:
 
             # determine and set the learning rate for this iteration
-            lr = get_lr(iter_num) if tc.decay_lr else tc.learning_rate
+            lr = self._get_lr(iter_num, tc) if tc.decay_lr else tc.learning_rate
             for param_group in optimizer.param_groups:
                 param_group['lr'] = lr
 
             # evaluate the loss on train/val sets and write checkpoints
             if iter_num % tc.eval_interval == 0:
-                losses = estimate_loss()
-                print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+                (train_loss, val_loss) = self._estimate_loss(train_data, val_data, tc)
+                print(f"step {iter_num}: train loss {train_loss:.4f}, val loss {val_loss:.4f}")
 
-                if losses['val'] < best_val_loss: # or always_save_checkpoint:
-                    best_val_loss = losses['val']
+                if val_loss < best_val_loss: # or always_save_checkpoint:
+                    best_val_loss = val_loss
                     checkpoint = raw_model.state_dict()
 
             # forward backward update, with optional gradient accumulation to simulate larger batch size
@@ -158,7 +154,7 @@ class ANN(object):
                     logits, loss = self.model(X, Y)
                     loss = loss / tc.gradient_accumulation_steps # scale the loss to account for gradient accumulation
                 # immediately async prefetch next batch while model is doing the forward pass on the GPU
-                X, Y = get_batch('train')
+                X, Y = self._get_batch(train_data, tc)
                 # backward pass, with gradient scaling if training in fp16
                 scaler.scale(loss).backward()
             # clip the gradient
@@ -192,7 +188,7 @@ class ANN(object):
 
     def sample(self, checkpoint, coder):
 
-        device = 'cpu'
+        device = 'cpu' # override
 
         # -----------------------------------------------------------------------------
         start = "Lo!\n" # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
