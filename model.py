@@ -6,7 +6,7 @@ https://github.com/openai/gpt-2/blob/master/src/model.py
 2) huggingface/transformers PyTorch implementation:
 https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py
 """
-
+import os
 import math
 import inspect
 from dataclasses import dataclass
@@ -14,6 +14,17 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+
+class Utils:
+    def set_seed(hc):
+        torch.manual_seed(hc.seed + hc.seed_offset)
+
+    def save_weights(checkpoint, tc):
+        torch.save(checkpoint, os.path.join(tc.out_dir, 'ckpt.pt'))
+
+    def load_weights(tc):
+        return torch.load(os.path.join(tc.out_dir, 'ckpt.pt'), weights_only=True)
+
 
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """

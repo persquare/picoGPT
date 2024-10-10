@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import torch
 
 from model import GPT
+from model import Utils
 
 @dataclass
 class TrainConfig:
@@ -259,15 +260,15 @@ def main():
     if True:
         input_file_path = os.path.join('data', tc.dataset, 'input.txt')
         train_data, val_data = get_data(input_file_path, coder)
-        torch.manual_seed(hc.seed + hc.seed_offset)
+        Utils.set_seed(hc)
         checkpoint = ann.train(tc, train_data, val_data)
         os.makedirs(tc.out_dir, exist_ok=True)
         print(f"saving checkpoint to {tc.out_dir}")
-        torch.save(checkpoint, os.path.join(tc.out_dir, 'ckpt.pt'))
-        # else:
+        Utils.save_weights(checkpoint, tc)
+    else:
         # init from a model saved in a specific directory
-        checkpoint = torch.load(os.path.join(tc.out_dir, 'ckpt.pt'), map_location='cpu', weights_only=True)
-        torch.manual_seed(hc.seed + hc.seed_offset)
+        checkpoint = Utils.load_weights(tc)
+        Utils.set_seed(hc)
         sc = SampleConfig()
         res = ann.sample(checkpoint, coder, sc)
         print(res)
