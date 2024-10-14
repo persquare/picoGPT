@@ -62,10 +62,10 @@ class HardwareConfig:
 @dataclass
 class SampleConfig:
         start: str = "\n"
-        num_samples: int = 10 # number of samples to draw
+        # num_samples: int = 1 # number of samples to draw
         max_new_tokens: int = 500 # number of tokens generated in each sample
         temperature: float = 0.8 # 1.0 = no change, < 1.0 = less random, > 1.0 = more random, in predictions
-        top_k: int = 200 # retain only the top_k most likely tokens, clamp others to have 0 probability
+        top_k: int = 20 # retain only the top_k most likely tokens, clamp others to have 0 probability
 
 
 class ANN(object):
@@ -82,7 +82,7 @@ class ANN(object):
     @torch.no_grad()
     def _estimate_loss(self, train_data, val_data, tc):
         out = []
-        # self.model.eval() # <-- THIS IS A NO-OP UNLESS IT HAS SERIOUS SIDE EFFECTS
+        self.model.eval() # <-- THIS IS A NO-OP UNLESS IT HAS SERIOUS SIDE EFFECTS
         for data in [train_data, val_data]:
             losses = torch.zeros(tc.eval_iters)
             for k in range(tc.eval_iters):
@@ -91,7 +91,7 @@ class ANN(object):
                     logits, loss = self.model(X, Y)
                 losses[k] = loss.item()
             out.append(losses.mean())
-        # self.model.train() # <-- THIS IS A NO-OP UNLESS IT HAS SERIOUS SIDE EFFECTS
+        self.model.train() # <-- THIS IS A NO-OP UNLESS IT HAS SERIOUS SIDE EFFECTS
         return tuple(out)
 
     # learning rate decay scheduler (cosine with warmup)
@@ -189,21 +189,13 @@ class ANN(object):
 
         self.model.load_state_dict(checkpoint)
 
-        #model.eval()
+        self.model.eval()
         self.model.to(device)
 
         start_ids = coder.encode(sc.start)
-        x = (torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...])
 
-        # run generation
-        res = []
-        with torch.no_grad():
-            with contextlib.nullcontext():
-                for k in range(sc.num_samples):
-                    y = self.model.generate(x, sc.max_new_tokens, temperature=sc.temperature, top_k=sc.top_k)
-                    res.append(coder.decode(y[0].tolist()))
-
-        return "".join(res)
+        y = self.model.generate(start_ids, device, sc)
+        return coder.decode(y[0].tolist())
 
 def get_data(input_file_path, coder):
 
@@ -247,7 +239,7 @@ def main():
     hc = HardwareConfig()
     ann = ANN(hc.device)
 
-    if True:
+    if False:
         input_file_path = os.path.join('data', tc.dataset, 'input.txt')
         train_data, val_data = get_data(input_file_path, coder)
         Utils.set_seed(hc)
