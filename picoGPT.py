@@ -5,11 +5,7 @@ $ python train.py
 import os
 import time
 import math
-import pickle
-import contextlib
 from dataclasses import dataclass
-
-import torch
 
 from model import GPT
 from model import Utils
@@ -52,9 +48,8 @@ class ModelConfig:
 @dataclass
 class HardwareConfig:
     # system HW
-    device: str = 'mps' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
-    dtype: str = 'float32' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
-    compile: bool = False # use PyTorch 2.0 to compile the model to be faster
+    device: str = 'mps' # 'mps' on macbooks or try 'cpu'
+    dtype: str = 'float32'
     # various inits, derived attributes, I/O setup
     seed_offset: int = 0
     seed: int = 1337
@@ -79,19 +74,17 @@ class ANN(object):
         self.model = GPT(mc)
 
     # helps estimate an arbitrarily accurate loss over either split using many batches
-    @torch.no_grad()
     def _estimate_loss(self, train_data, val_data, tc):
         out = []
-        self.model.eval() # <-- THIS IS A NO-OP UNLESS IT HAS SERIOUS SIDE EFFECTS
+        self.model.eval()
         for data in [train_data, val_data]:
-            losses = torch.zeros(tc.eval_iters)
+            losses = Utils.array_of_zero_tensors(tc.eval_iters)
             for k in range(tc.eval_iters):
                 X, Y = Utils.get_batch(data, self.device, tc)
-                with contextlib.nullcontext():
-                    logits, loss = self.model(X, Y)
+                logits, loss = self.model(X, Y)
                 losses[k] = loss.item()
             out.append(losses.mean())
-        self.model.train() # <-- THIS IS A NO-OP UNLESS IT HAS SERIOUS SIDE EFFECTS
+        self.model.train()
         return tuple(out)
 
     # learning rate decay scheduler (cosine with warmup)
@@ -109,12 +102,8 @@ class ANN(object):
         return tc.min_lr + coeff * (tc.learning_rate - tc.min_lr)
 
 
-
     def train(self, tc, train_data, val_data):
         self.model.to(self.device)
-        # Cuda only. If enabled=False scaler is a no-op but still needed for convergence?!
-        scaler = torch.amp.GradScaler(enabled=False)
-        # optimizer
         optimizer = self.model.configure_optimizers(tc.weight_decay, tc.learning_rate, (tc.beta1, tc.beta2), self.device)
 
         # training loop
@@ -146,22 +135,18 @@ class ANN(object):
                     checkpoint = raw_model.state_dict()
 
             # forward backward update, with optional gradient accumulation to simulate larger batch size
-            # and using the GradScaler if data type is float16
             for micro_step in range(tc.gradient_accumulation_steps):
-                with contextlib.nullcontext():
-                    logits, loss = self.model(X, Y)
-                    loss = loss / tc.gradient_accumulation_steps # scale the loss to account for gradient accumulation
+                logits, loss = self.model(X, Y)
+                loss = loss / tc.gradient_accumulation_steps # scale the loss to account for gradient accumulation
                 # immediately async prefetch next batch while model is doing the forward pass on the GPU
                 X, Y = Utils.get_batch(train_data, self.device, tc)
-                # backward pass, with gradient scaling if training in fp16
-                scaler.scale(loss).backward()
+                # backward pass
+                loss.backward()
             # clip the gradient
             if tc.grad_clip != 0.0:
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), tc.grad_clip)
-            # step the optimizer and scaler if training in fp16
-            scaler.step(optimizer)
-            scaler.update()
+                self.model.clip_grad_norm(tc.grad_clip)
+
+            optimizer.step()
             # flush the gradients as soon as we can, no need for this memory anymore
             optimizer.zero_grad(set_to_none=True)
 
@@ -196,6 +181,7 @@ class ANN(object):
 
         y = self.model.generate(start_ids, device, sc)
         return coder.decode(y[0].tolist())
+
 
 def get_data(input_file_path, coder):
 
@@ -239,7 +225,7 @@ def main():
     hc = HardwareConfig()
     ann = ANN(hc.device)
 
-    if False:
+    if True:
         input_file_path = os.path.join('data', tc.dataset, 'input.txt')
         train_data, val_data = get_data(input_file_path, coder)
         Utils.set_seed(hc)
