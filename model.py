@@ -35,6 +35,10 @@ class Utils:
         x, y = x.to(device), y.to(device)
         return x, y
 
+    def array_of_zero_tensors(n):
+        return torch.zeros(n)
+
+
 
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
@@ -144,6 +148,9 @@ class GPT(nn.Module):
 
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
+
+    def clip_grad_norm(self, grad_clip):
+        torch.nn.utils.clip_grad_norm_(self.parameters(), grad_clip)
 
     def get_num_params(self, non_embedding=True):
         """
