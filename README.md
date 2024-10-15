@@ -4,16 +4,24 @@
 ## install
 
 ```
-pip install torch numpy requests
+pip install torch requests
 ```
 
 Dependencies:
 
 - [pytorch](https://pytorch.org) <3
-- [numpy](https://numpy.org/install/) <3
 - requests
 
 ## quick start
+
+```sh
+python picoGPT.py train
+python picoGPT.py sample
+```
+
+If you're not using a Mac, try changing device to 'cuda' or some such... 'cpu' should work if all else fails.
+
+<!--
 
 If you are not a deep learning professional and you just want to feel the magic and get your feet wet, the fastest way to get started is to train a character-level GPT on the works of Shakespeare. First, we download it as a single (1MB) file and turn it from raw text into one large stream of integers:
 
@@ -125,3 +133,4 @@ For more questions/discussions feel free to stop by **#nanoGPT** on Discord:
 ## acknowledgements
 
 All nanoGPT experiments are powered by GPUs on [Lambda labs](https://lambdalabs.com), my favorite Cloud GPU provider. Thank you Lambda labs for sponsoring nanoGPT!
+-->
