@@ -201,12 +201,20 @@ def get_data(input_file_path, coder):
 
 def main():
 
+
+    import sys
+
     tc = TrainConfig()
     coder = Coder(tc)
+
     hc = HardwareConfig()
     ann = ANN(hc.device)
 
-    if True:
+    if len(sys.argv) != 2:
+        print(f"Usage: {sys.argv[0]} train|sample")
+        sys.exit(0)
+
+    if sys.argv[1].startswithi("t"):
         input_file_path = os.path.join('data', tc.dataset, 'input.txt')
         train_data, val_data = get_data(input_file_path, coder)
         Utils.set_seed(hc)
@@ -214,7 +222,7 @@ def main():
         os.makedirs(tc.out_dir, exist_ok=True)
         print(f"saving checkpoint to {tc.out_dir}")
         Utils.save_weights(checkpoint, tc)
-        # else:
+    else:
         # init from a model saved in a specific directory
         checkpoint = Utils.load_weights(tc)
         Utils.set_seed(hc)
