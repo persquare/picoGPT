@@ -29,9 +29,6 @@ class TrainConfig:
     beta2: float  = 0.95
     grad_clip: float  = 1.0 # clip gradients at this value, or disable if == 0.0
     # learning rate decay settings
-    decay_lr: bool = True # whether to decay the learning rate
-    warmup_iters: int = 100 # how many steps to warm up for
-    lr_decay_iters: int = 2000 # should be ~= max_iters per Chinchilla
     min_lr: float  = 1e-4 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
 
 @dataclass
@@ -87,20 +84,6 @@ class ANN(object):
         self.model.train()
         return tuple(out)
 
-    # learning rate decay scheduler (cosine with warmup)
-    def _get_lr(self, it, tc):
-        # 1) linear warmup for warmup_iters steps
-        if it < tc.warmup_iters:
-            return tc.learning_rate * it / tc.warmup_iters
-        # 2) if it > lr_decay_iters, return min learning rate
-        if it > tc.lr_decay_iters:
-            return tc.min_lr
-        # 3) in between, use cosine decay down to min learning rate
-        decay_ratio = (it - tc.warmup_iters) / (tc.lr_decay_iters - tc.warmup_iters)
-        assert 0 <= decay_ratio <= 1
-        coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
-        return tc.min_lr + coeff * (tc.learning_rate - tc.min_lr)
-
 
     def train(self, tc, train_data, val_data):
         self.model.to(self.device)
@@ -115,12 +98,14 @@ class ANN(object):
         iter_num = 0
         best_val_loss = 1e9
 
+        decay_rate = math.pow(10, math.log10(tc.min_lr/tc.learning_rate)/tc.max_iters)
+        lr = tc.learning_rate
         checkpoint = None
 
         while True:
 
             # determine and set the learning rate for this iteration
-            lr = self._get_lr(iter_num, tc) if tc.decay_lr else tc.learning_rate
+            lr = lr * decay_rate
             for param_group in optimizer.param_groups:
                 param_group['lr'] = lr
 
@@ -157,7 +142,7 @@ class ANN(object):
                 # get loss as float. note: this is a CPU-GPU sync point
                 # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
                 lossf = loss.item() * tc.gradient_accumulation_steps
-                print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms")
+                print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, learning rate {100*lr/tc.learning_rate:3.1f}%")
             iter_num += 1
 
             # termination conditions
