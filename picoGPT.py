@@ -109,8 +109,7 @@ class ANN(object):
         # training loop
         X, Y = Utils.get_batch(train_data, self.device, tc) # fetch the very first batch
         t0 = time.time()
-        local_iter_num = 0 # number of iterations in the lifetime of this process
-        raw_model = self.model #
+        # raw_model = self.model #
         running_mfu = -1.0
 
         iter_num = 0
@@ -130,9 +129,9 @@ class ANN(object):
                 (train_loss, val_loss) = self._estimate_loss(train_data, val_data, tc)
                 print(f"step {iter_num}: train loss {train_loss:.4f}, val loss {val_loss:.4f}")
 
-                if val_loss < best_val_loss: # or always_save_checkpoint:
+                if val_loss < best_val_loss:
                     best_val_loss = val_loss
-                    checkpoint = raw_model.state_dict()
+                    checkpoint = self.model.state_dict()
 
             # forward backward update, with optional gradient accumulation to simulate larger batch size
             for micro_step in range(tc.gradient_accumulation_steps):
@@ -158,12 +157,8 @@ class ANN(object):
                 # get loss as float. note: this is a CPU-GPU sync point
                 # scale up to undo the division above, approximating the true total loss (exact would have been a sum)
                 lossf = loss.item() * tc.gradient_accumulation_steps
-                if local_iter_num >= 5: # let the training loop settle a bit
-                    mfu = raw_model.estimate_mfu(tc.batch_size * tc.gradient_accumulation_steps, dt)
-                    running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-                print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+                print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms")
             iter_num += 1
-            local_iter_num += 1
 
             # termination conditions
             if iter_num > tc.max_iters:
@@ -183,6 +178,25 @@ class ANN(object):
         return coder.decode(y[0].tolist())
 
 
+class Coder(object):
+    def __init__(self, tc):
+        super().__init__()
+        input_file_path = os.path.join('data', tc.dataset, 'input.txt')
+        with open(input_file_path, 'r') as f:
+            data = f.read()
+        # get all the unique characters that occur in this text
+        chars = sorted(list(set(data)))
+        # create a mapping from characters to integers
+        self.stoi = { ch:i for i,ch in enumerate(chars) }
+        self.itos = { i:ch for i,ch in enumerate(chars) }
+
+    def encode(self, s):
+        return [self.stoi[c] for c in s] # encoder: take a string, output a list of integers
+
+    def decode(self, l):
+        return ''.join([self.itos[i] for i in l]) # decoder: take a list of integers, output a string
+
+
 def get_data(input_file_path, coder):
 
     with open(input_file_path, 'r') as f:
@@ -199,24 +213,6 @@ def get_data(input_file_path, coder):
 
     return train_ids, val_ids
 
-class Coder(object):
-    def __init__(self, tc):
-        super().__init__()
-        input_file_path = os.path.join('data', tc.dataset, 'input.txt')
-        with open(input_file_path, 'r') as f:
-            data = f.read()
-        # get all the unique characters that occur in this text
-        chars = sorted(list(set(data)))
-
-        # create a mapping from characters to integers
-        self.stoi = { ch:i for i,ch in enumerate(chars) }
-        self.itos = { i:ch for i,ch in enumerate(chars) }
-
-    def encode(self, s):
-        return [self.stoi[c] for c in s] # encoder: take a string, output a list of integers
-
-    def decode(self, l):
-        return ''.join([self.itos[i] for i in l]) # decoder: take a list of integers, output a string
 
 def main():
 
@@ -233,7 +229,7 @@ def main():
         os.makedirs(tc.out_dir, exist_ok=True)
         print(f"saving checkpoint to {tc.out_dir}")
         Utils.save_weights(checkpoint, tc)
-    else:
+        # else:
         # init from a model saved in a specific directory
         checkpoint = Utils.load_weights(tc)
         Utils.set_seed(hc)
