@@ -214,7 +214,7 @@ def main():
         print(f"Usage: {sys.argv[0]} train|sample")
         sys.exit(0)
 
-    if sys.argv[1].startswithi("t"):
+    if sys.argv[1].startswith("t"):
         input_file_path = os.path.join('data', tc.dataset, 'input.txt')
         train_data, val_data = get_data(input_file_path, coder)
         Utils.set_seed(hc)
