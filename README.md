@@ -4,12 +4,13 @@
 ## install
 
 ```
-pip install torch requests
+pip install torch numpy requests
 ```
 
 Dependencies:
 
 - [pytorch](https://pytorch.org) <3
+- [numpy](https://numpy.org/install/) <3
 - requests
 
 ## quick start
